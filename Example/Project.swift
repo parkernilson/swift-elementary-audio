@@ -37,7 +37,7 @@ let project = Project(
             settings: .settings(
                 base: [
                     "SWIFT_OBJC_INTEROP_MODE": "objcxx",
-                    "OTHER_SWIFT_FLAGS": ["-cxx-interoperability-mode=default"],
+                    "OTHER_SWIFT_FLAGS": ["-cxx-interoperability-mode=default", "-package-name", "swift-elementary-audio"],
                 ]
             )
         ),

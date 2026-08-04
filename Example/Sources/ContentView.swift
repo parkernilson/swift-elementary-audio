@@ -103,15 +103,7 @@ class SimpleAudioEngine: ObservableObject {
                 return noErr
             }
 
-            let context = elem.FloatBlockContext(
-                inputData: nil,
-                numInputChannels: 0,
-                outputData: ptr,
-                numSamples: Int(frameCount),
-                userData: nil
-            )
-
-            capturedNode.process(context)
+            capturedNode.processSimple(ptr, Int(frameCount))
 
             return noErr
         }
