@@ -11,6 +11,8 @@ DerivedData/
 Derived/
 *.xcodeproj
 *.xcworkspace
+Example/.build/
+Example/Tuist/.build/
 
 # Claude Code
 .claude/
