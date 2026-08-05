@@ -17,3 +17,4 @@ Example/Tuist/.build/
 # Claude Code
 .claude/
 .cache/
+.superpowers/
