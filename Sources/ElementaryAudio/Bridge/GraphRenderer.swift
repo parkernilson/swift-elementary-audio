@@ -29,6 +29,9 @@ public final class GraphRenderer: @unchecked Sendable {
     private var createdNodeIds: Set<Int32> = []
     // Track root IDs for activation
     private var currentRootIds: [Int32] = []
+    // Persists across render() calls so unchanged nodes are updated in place
+    // instead of recreated -- see ReconciliationCache.
+    private let reconciliationCache = ReconciliationCache()
 
     /// Creates a new graph renderer
     public init() {}
@@ -43,7 +46,7 @@ public final class GraphRenderer: @unchecked Sendable {
 
         // Encode the graph to instructions
         var encoder = InstructionEncoder()
-        encoder.encode(graph)
+        encoder.encode(graph, cache: reconciliationCache)
 
         let instructions = encoder.allInstructions
 
@@ -152,6 +155,7 @@ public final class GraphRenderer: @unchecked Sendable {
         // The runtime handles node replacement internally
         createdNodeIds.removeAll()
         currentRootIds.removeAll()
+        reconciliationCache.removeAll()
     }
 
     /// Runs garbage collection on the runtime, releasing unused nodes

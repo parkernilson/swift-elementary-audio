@@ -165,6 +165,28 @@ final class GraphRendererProcessTests: XCTestCase {
         }
     }
 
+    func testRepeatedRenderWithKeyedConstStaysNonSilentAfterValueChange() throws {
+        let firstGraph = AudioGraph { El.cycle(El.const(key: "freq", value: 440.0)) * 0.5 }
+        try renderer.render(firstGraph)
+
+        for _ in 0 ..< 4 { _ = processBlock(numSamples: 512) }
+
+        let secondGraph = AudioGraph { El.cycle(El.const(key: "freq", value: 880.0)) * 0.5 }
+        try renderer.render(secondGraph)
+
+        var foundNonZero = false
+        for _ in 0 ..< 4 {
+            let samples = processBlock(numSamples: 512)
+            let maxAmp = samples.map { Swift.abs($0) }.max() ?? 0
+            if maxAmp > 0.1 {
+                foundNonZero = true
+                XCTAssertLessThanOrEqual(maxAmp, 1.0)
+                break
+            }
+        }
+        XCTAssertTrue(foundNonZero, "audio should still play after a second render reusing the keyed const node")
+    }
+
     // MARK: - Helpers
 
     private func processBlock(numSamples: Int) -> [Float] {
