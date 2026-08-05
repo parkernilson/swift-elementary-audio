@@ -193,6 +193,75 @@ final class GraphRendererProcessTests: XCTestCase {
         renderer.gc()
     }
 
+    func testRenderAfterReinitializeDoesNotReuseStaleCacheEntries() throws {
+        // ElemRuntime.initialize() replaces the entire native runtime,
+        // destroying the whole node table. Render the exact same graph
+        // shape before and after a re-initialize (e.g. a sample-rate
+        // change): if GraphRenderer's reconciliation cache isn't cleared in
+        // initialize(), the second render() hash-hits stale entries
+        // pointing at node IDs that no longer exist natively, and
+        // activateRoots fails on every subsequent render.
+        let graph = AudioGraph { El.cycle(El.const(key: "freq", value: 440.0)) * 0.5 }
+        try renderer.render(graph)
+        for _ in 0 ..< 4 { _ = processBlock(numSamples: 512) }
+
+        renderer.initialize(sampleRate: 44100, blockSize: 512)
+
+        // Must not throw RenderError.renderFailed due to a stale cache hit.
+        try renderer.render(graph)
+
+        var foundNonZero = false
+        for _ in 0 ..< 4 {
+            let samples = processBlock(numSamples: 512)
+            let maxAmp = samples.map { Swift.abs($0) }.max() ?? 0
+            if maxAmp > 0.1 {
+                foundNonZero = true
+                XCTAssertLessThanOrEqual(maxAmp, 1.0)
+                break
+            }
+        }
+        XCTAssertTrue(foundNonZero, "audio should play after re-initializing and re-rendering the same graph")
+    }
+
+    func testFailedRenderClearsCacheSoNextRenderRecovers() throws {
+        let graph = AudioGraph { El.cycle(El.const(key: "freq", value: 440.0)) * 0.5 }
+        try renderer.render(graph)
+        for _ in 0 ..< 2 { _ = processBlock(numSamples: 512) }
+
+        // Wipe the native node table directly through ElemRuntime, bypassing
+        // GraphRenderer.initialize() (which itself clears the reconciliation
+        // cache -- Finding 1). This leaves the Swift-side cache holding
+        // hash -> nodeId entries whose native nodes no longer exist, which is
+        // exactly the state a mid-render `sendInstruction` failure would
+        // leave behind per Finding 2 (the cache asserting nodes exist that
+        // were never actually (re-)created natively).
+        ElemRuntime.getInstance().initialize(44100, 512)
+
+        // With the native table wiped but the cache still full of stale
+        // entries, this render's cached root node ID no longer exists
+        // natively -- it must fail.
+        XCTAssertThrowsError(try renderer.render(graph))
+
+        // The actual regression check: render() must have cleared the
+        // reconciliation cache on that failure. If it hadn't, this second
+        // render would hash-hit the same stale entries and fail forever
+        // (a permanently wedged renderer). Instead it should be treated as
+        // a full miss and recreate every node from scratch.
+        try renderer.render(graph)
+
+        var foundNonZero = false
+        for _ in 0 ..< 4 {
+            let samples = processBlock(numSamples: 512)
+            let maxAmp = samples.map { Swift.abs($0) }.max() ?? 0
+            if maxAmp > 0.1 {
+                foundNonZero = true
+                XCTAssertLessThanOrEqual(maxAmp, 1.0)
+                break
+            }
+        }
+        XCTAssertTrue(foundNonZero, "renderer must recover and produce audio after a failed render")
+    }
+
     // MARK: - Helpers
 
     private func processBlock(numSamples: Int) -> [Float] {

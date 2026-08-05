@@ -10,7 +10,7 @@ Swift Elementary Audio — a declarative Swift DSL for real-time audio processin
 
 ```bash
 swift build          # Build all targets
-swift test          # Run all 64 tests (ComparisonNodeTests, SequencerNodeTests, GraphRendererProcessTests, NodeHasherTests, ReconciliationCacheTests, InstructionEncoderReconciliationTests)
+swift test          # Run all 67 tests (ComparisonNodeTests, SequencerNodeTests, GraphRendererProcessTests, NodeHasherTests, ReconciliationCacheTests, InstructionEncoderReconciliationTests)
 swift run swift-elementary-audio     # Run the macOS SwiftUI demo app
 swift run ElementaryPlayground       # Run the visual node editor playground
 ```
@@ -36,13 +36,15 @@ GraphRenderSequence (real-time audio thread)
 ### Key modules
 
 - **cxxElementaryAudio** — C++ target. `ElemRuntime.h` is the singleton bridge exposing graph mutation methods to Swift. `CustomNode.h/.cpp` is a custom GraphNode implementation. Elementary Audio lives as a git submodule at `Sources/cxxElementaryAudio/ElementaryAudio/` with a nested `choc` submodule for BlockEvents.
-- **ElementaryAudio** — Swift library. Core types (`AudioNode` protocol, `Signal` wrapper, `NodeID`, `PropertyValue`), DSL (`El.*` factory functions, `AudioGraphBuilder` result builder, operator overloads), and Bridge (`InstructionEncoder`, `GraphRenderer`).
+- **ElementaryAudio** — Swift library. Core types (`AudioNode` protocol, `Signal` wrapper, `NodeID`, `PropertyValue`), DSL (`El.*` factory functions, `AudioGraphBuilder` result builder, operator overloads), and Bridge (`InstructionEncoder`, `GraphRenderer`, `NodeHasher`, `ReconciliationCache`).
+  - `NodeHasher` — pure function computing a content-addressed structural hash for a node from `(nodeType, key-or-properties, childHashes)`.
+  - `ReconciliationCache` — persistent `hash → (nodeId, properties)` map owned by `GraphRenderer` and passed into each `InstructionEncoder.encode()` call, so structurally-unchanged nodes are recognized and updated in place across renders instead of recreated.
 - **ElementaryFlow** — Visual node editor built on the Flow library (vendored in `Vendor/Flow/`).
 
 ### How graph rendering works
 
-1. `GraphRenderer.render()` calls `gc()` to clean up stale nodes from previous render
-2. `InstructionEncoder.encode()` traverses the `AudioGraph`, encoding each node depth-first: createNode → setProperty → appendChild (with childOutputChannel for v4 multi-channel)
+1. `GraphRenderer.render()` calls `gc()` to clean up stale nodes from previous render; the pruned node IDs it returns are evicted from the `ReconciliationCache` so the cache stays in sync with what the native runtime actually destroyed.
+2. `InstructionEncoder.encode()` traverses the `AudioGraph` depth-first, hashing each node (`NodeHasher`) and checking it against the persistent `ReconciliationCache`: a hash **hit** (structurally the same node as a previous render) emits only a `setProperty` diff for changed keys — no `createNode`/`appendChild`; a hash **miss** emits the full `createNode → setProperty → appendChild` sequence (with `childOutputChannel` for v4 multi-channel) and inserts the node into the cache.
 3. Instructions are sent one-by-one to `ElemRuntime` methods which wrap them as `elem::js::Array` batches
 4. `activateRoots` + `commitUpdates` triggers `buildRenderSequence()` which pushes a new render sequence to the RT thread via lock-free queue
 

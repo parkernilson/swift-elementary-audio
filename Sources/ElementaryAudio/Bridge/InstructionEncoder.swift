@@ -66,7 +66,10 @@ public struct InstructionEncoder: Sendable {
     ///     successive calls (as `GraphRenderer` does) to get in-place
     ///     property updates instead of full recreation for unchanged nodes.
     mutating func encode(_ graph: AudioGraph, cache: ReconciliationCache) {
-        let rootIds = graph.roots.map { encodeNode($0, cache: cache).nodeId }
+        // Local to this single encode() call only -- see encodeNode's doc
+        // comment. Not persisted across renders (unlike `cache`, which is).
+        var visited: [Int32: (nodeId: NodeID, hash: Int)] = [:]
+        let rootIds = graph.roots.map { encodeNode($0, cache: cache, visited: &visited).nodeId }
         activateRoots(rootIds)
         commit()
     }
@@ -75,12 +78,26 @@ public struct InstructionEncoder: Sendable {
     /// existing native node when this node's structural hash is already in
     /// `cache`.
     ///
+    /// - Parameter visited: A memo of nodes already processed *within this
+    ///   one `encode()` call*, keyed by the Swift node's own object-identity
+    ///   `nodeId`. A node referenced from multiple places in a single graph
+    ///   (e.g. a shared LFO signal feeding two destinations) would otherwise
+    ///   be re-walked once per reference -- correct (the cross-render
+    ///   `cache` still resolves repeat encounters to the same native node
+    ///   id) but exponential in the depth of shared subgraphs, since every
+    ///   root-to-leaf path re-visits shared nodes. This memo restores O(nodes)
+    ///   traversal by short-circuiting on a second encounter of the same
+    ///   Swift node instance in this call.
     /// - Returns: The resolved node ID (the cached one on a hit, or the
     ///   node's own freshly-assigned one on a miss) and its structural hash
     ///   -- both needed by the caller (a parent node computing its own hash,
     ///   or `encode` activating roots).
     @discardableResult
-    private mutating func encodeNode(_ node: any AudioNode, cache: ReconciliationCache) -> (nodeId: NodeID, hash: Int) {
+    private mutating func encodeNode(
+        _ node: any AudioNode,
+        cache: ReconciliationCache,
+        visited: inout [Int32: (nodeId: NodeID, hash: Int)]
+    ) -> (nodeId: NodeID, hash: Int) {
         // Unwrap Signal to get the actual node
         let actualNode: any AudioNode
         let actualNodeType: String
@@ -93,12 +110,17 @@ public struct InstructionEncoder: Sendable {
             actualNodeType = node.nodeType
         }
 
+        if let alreadyProcessed = visited[actualNode.nodeId.rawValue] {
+            return alreadyProcessed
+        }
+
         // Children must be resolved first: their (possibly-reused) node IDs
         // feed both this node's hash and, on a miss, its appendChild calls.
-        let childResults = actualNode.children.map { encodeNode($0, cache: cache) }
+        let childResults = actualNode.children.map { encodeNode($0, cache: cache, visited: &visited) }
         let childHashes = childResults.map { $0.hash }
         let hash = NodeHasher.hash(nodeType: actualNodeType, properties: actualNode.properties, childHashes: childHashes)
 
+        let resolved: (nodeId: NodeID, hash: Int)
         if let existing = cache.lookup(hash: hash) {
             // Hit: same node as a previous render (or an earlier reference
             // to it within this same render) -- update only changed props.
@@ -106,20 +128,23 @@ public struct InstructionEncoder: Sendable {
                 setProperty(nodeId: existing.nodeId, key: key, value: value)
             }
             cache.updateProperties(hash: hash, properties: actualNode.properties)
-            return (existing.nodeId, hash)
+            resolved = (existing.nodeId, hash)
+        } else {
+            // Miss: a genuinely new/changed node -- create it fully.
+            let nodeId = actualNode.nodeId
+            createNode(id: nodeId, type: actualNodeType)
+            for (key, value) in actualNode.properties {
+                setProperty(nodeId: nodeId, key: key, value: value)
+            }
+            for childResult in childResults {
+                appendChild(parentId: nodeId, childId: childResult.nodeId)
+            }
+            cache.insert(hash: hash, nodeId: nodeId, properties: actualNode.properties)
+            resolved = (nodeId, hash)
         }
 
-        // Miss: a genuinely new/changed node -- create it fully.
-        let nodeId = actualNode.nodeId
-        createNode(id: nodeId, type: actualNodeType)
-        for (key, value) in actualNode.properties {
-            setProperty(nodeId: nodeId, key: key, value: value)
-        }
-        for childResult in childResults {
-            appendChild(parentId: nodeId, childId: childResult.nodeId)
-        }
-        cache.insert(hash: hash, nodeId: nodeId, properties: actualNode.properties)
-        return (nodeId, hash)
+        visited[actualNode.nodeId.rawValue] = resolved
+        return resolved
     }
 
     // MARK: - Instruction Generation

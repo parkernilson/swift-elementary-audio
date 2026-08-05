@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import ElementaryAudio
 
@@ -90,5 +91,40 @@ final class InstructionEncoderReconciliationTests: XCTestCase {
         encoder2.encode(AudioGraph(root: KeyedConstNode(key: "freq", value: 440)), cache: cache)
 
         XCTAssertEqual(encoder2.allInstructions.filter { $0.type == .createNode }.count, 1, "once evicted, an identical-looking node must be treated as a fresh miss, not reused")
+    }
+
+    func testSharedSubgraphTraversalDoesNotBlowUpExponentially() {
+        let cache = ReconciliationCache()
+
+        // Build a "diamond" chain: each level references the exact same
+        // Swift node value as both children of a BinaryMathNode, so level i
+        // is structurally reachable from the root via 2^i distinct
+        // root-to-leaf paths, even though there are only `depth + 1`
+        // distinct nodes overall. A traversal that doesn't memoize by
+        // object identity within one encode() call revisits shared nodes
+        // once per path -- O(2^depth) node visits instead of O(depth).
+        let depth = 22
+        var node: any AudioNode = ConstNode(1.0)
+        for _ in 0 ..< depth {
+            node = BinaryMathNode(.add, node, node)
+        }
+        let graph = AudioGraph(root: node)
+
+        let start = Date()
+        var encoder = InstructionEncoder()
+        encoder.encode(graph, cache: cache)
+        let elapsed = Date().timeIntervalSince(start)
+
+        // Output correctness: exactly one distinct node per level (the
+        // memoization fix must not change *what* gets created, only how
+        // many times the tree is walked to figure that out).
+        XCTAssertEqual(encoder.allInstructions.filter { $0.type == .createNode }.count, depth + 1)
+
+        // Regression guard: on a representative dev machine, this same
+        // traversal takes several seconds without per-call memoization
+        // (2^22 redundant leaf visits) and well under a millisecond with
+        // it. A generous bound catches the exponential blowup while
+        // leaving huge headroom for slower CI hardware on the passing path.
+        XCTAssertLessThan(elapsed, 2.0, "traversal of a shared subgraph must not be exponential in its depth")
     }
 }
