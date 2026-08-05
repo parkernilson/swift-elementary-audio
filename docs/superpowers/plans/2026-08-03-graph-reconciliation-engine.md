@@ -17,7 +17,25 @@
 
 ## Environment note
 
-`swift build`/`swift test` could not be executed in this planning session — the sandboxed environment's `swift package` manifest compilation fails with `sandbox-exec: sandbox_apply: Operation not permitted` regardless of sandbox settings on the Bash tool itself (a limitation of this specific execution environment, not of the code). Every verification step below still specifies the exact command and expected outcome; whoever executes this plan needs an environment where `swift build`/`swift test` actually run (e.g. this repo opened directly in Xcode, or a differently-configured agent sandbox) to confirm each step's outcome.
+`swift build`/`swift test` via the CLI could not be executed in the planning
+session — SwiftPM's manifest compilation fails there with
+`sandbox-exec: sandbox_apply: Operation not permitted`, a limitation of that
+specific execution context. However, **the Xcode MCP tools work and are the
+verification path for this plan**: confirmed by switching to the
+`swift-elementary-audio-Package` scheme (not the default `ElementaryAudio`
+library scheme, which has an empty test plan), destination "My Mac" (not a
+simulator, to match native `swift test` behavior), then
+`BuildProject(buildForTesting: true)` followed by `RunAllTests`. This ran
+the real suite: **44 tests, 44 passed** — the current baseline before any
+task in this plan starts (already higher than CLAUDE.md's stale "23").
+
+Wherever a step below says `swift test --filter X`, use instead:
+1. `XcodeListWindows` to get the workspace's `tabIdentifier` (only needed once per session).
+2. If the active scheme isn't `swift-elementary-audio-Package` on destination "My Mac", `XcodeSwitchScheme(schemeName: "swift-elementary-audio-Package", tabIdentifier:)` then `XcodeSwitchRunDestination(displayTitle: "My Mac", tabIdentifier:)`.
+3. `BuildProject(buildForTesting: true, tabIdentifier:)`.
+4. `RunAllTests(tabIdentifier:)` for a full-suite step, or `GetTestList(tabIdentifier:)` followed by `RunSomeTests(tests: [...], tabIdentifier:)` for a single-class/test step — use the `targetName`/`identifier` fields `GetTestList` reports to build each `{targetName, testIdentifier}` pair.
+
+These four MCP tools (plus `GetTestList`) are deferred tools — load their schemas via `ToolSearch` (e.g. `select:mcp__xcode__RunAllTests,mcp__xcode__BuildProject,...`) before calling them if they aren't already loaded.
 
 ---
 
@@ -932,8 +950,8 @@ Expected: builds cleanly, no warnings about unused `gc()` results.
 
 - [ ] **Step 5: Run the full suite and update the CLAUDE.md test count**
 
-Run: `swift test 2>&1 | tail -20`
-Expected: PASS, with a summary line reporting the total test count.
+Run the full suite (see Environment note: `BuildProject(buildForTesting: true)` then `RunAllTests`).
+Expected: PASS, 64 tests total (the confirmed baseline of 44 + 7 from `NodeHasherTests` + 6 from `ReconciliationCacheTests` + 5 from `InstructionEncoderReconciliationTests` + 2 new tests added to `GraphRendererProcessTests` across Tasks 3-4).
 
 Open `CLAUDE.md` and find:
 
@@ -941,7 +959,13 @@ Open `CLAUDE.md` and find:
 swift test          # Run all 23 tests (ComparisonNodeTests + GraphRendererProcessTests)
 ```
 
-Replace `23` with the number `swift test` actually reported, and update the parenthetical to list every test class that now exists (`ComparisonNodeTests`, `SequencerNodeTests`, `GraphRendererProcessTests`, `NodeHasherTests`, `ReconciliationCacheTests`, `InstructionEncoderReconciliationTests`).
+Replace with:
+
+```
+swift test          # Run all 64 tests (ComparisonNodeTests, SequencerNodeTests, GraphRendererProcessTests, NodeHasherTests, ReconciliationCacheTests, InstructionEncoderReconciliationTests)
+```
+
+If the actual count `RunAllTests` reports differs from 64, use the real reported number instead -- it means either the 44-test baseline recorded above has drifted or a step above added a different number of tests than expected; double check which before writing the number down.
 
 - [ ] **Step 6: Commit**
 
