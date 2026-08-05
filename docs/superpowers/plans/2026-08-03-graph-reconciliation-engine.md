@@ -17,25 +17,21 @@
 
 ## Environment note
 
-`swift build`/`swift test` via the CLI could not be executed in the planning
-session — SwiftPM's manifest compilation fails there with
-`sandbox-exec: sandbox_apply: Operation not permitted`, a limitation of that
-specific execution context. However, **the Xcode MCP tools work and are the
-verification path for this plan**: confirmed by switching to the
-`swift-elementary-audio-Package` scheme (not the default `ElementaryAudio`
-library scheme, which has an empty test plan), destination "My Mac" (not a
-simulator, to match native `swift test` behavior), then
-`BuildProject(buildForTesting: true)` followed by `RunAllTests`. This ran
-the real suite: **44 tests, 44 passed** — the current baseline before any
-task in this plan starts (already higher than CLAUDE.md's stale "23").
+`swift test` via the CLI now works directly (confirmed: `swift test` reports
+`Executed 44 tests, with 0 failures` — the current baseline before any task
+in this plan starts, already higher than CLAUDE.md's stale "23"). Use
+`swift test --filter X` as written in each step below.
 
-Wherever a step below says `swift test --filter X`, use instead:
-1. `XcodeListWindows` to get the workspace's `tabIdentifier` (only needed once per session).
-2. If the active scheme isn't `swift-elementary-audio-Package` on destination "My Mac", `XcodeSwitchScheme(schemeName: "swift-elementary-audio-Package", tabIdentifier:)` then `XcodeSwitchRunDestination(displayTitle: "My Mac", tabIdentifier:)`.
-3. `BuildProject(buildForTesting: true, tabIdentifier:)`.
-4. `RunAllTests(tabIdentifier:)` for a full-suite step, or `GetTestList(tabIdentifier:)` followed by `RunSomeTests(tests: [...], tabIdentifier:)` for a single-class/test step — use the `targetName`/`identifier` fields `GetTestList` reports to build each `{targetName, testIdentifier}` pair.
-
-These four MCP tools (plus `GetTestList`) are deferred tools — load their schemas via `ToolSearch` (e.g. `select:mcp__xcode__RunAllTests,mcp__xcode__BuildProject,...`) before calling them if they aren't already loaded.
+If CLI access is ever unavailable in a given session, the Xcode MCP tools
+are a confirmed working fallback: switch to the `swift-elementary-audio-Package`
+scheme (not the default `ElementaryAudio` library scheme, which has an empty
+test plan) on destination "My Mac" (not a simulator, to match native
+`swift test` behavior), then `BuildProject(buildForTesting: true)` followed
+by `RunAllTests`, or `GetTestList` + `RunSomeTests(tests: [...])` for a
+single-class/test run — use the `targetName`/`identifier` fields
+`GetTestList` reports to build each `{targetName, testIdentifier}` pair.
+These are deferred tools — load their schemas via `ToolSearch` first (e.g.
+`select:mcp__xcode__RunAllTests,mcp__xcode__BuildProject,...`).
 
 ---
 
