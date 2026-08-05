@@ -187,6 +187,12 @@ final class GraphRendererProcessTests: XCTestCase {
         XCTAssertTrue(foundNonZero, "audio should still play after a second render reusing the keyed const node")
     }
 
+    func testGcAfterRenderDoesNotCrash() throws {
+        try renderer.render(AudioGraph { El.cycle(440.0) })
+        _ = processBlock(numSamples: 512)
+        renderer.gc()
+    }
+
     // MARK: - Helpers
 
     private func processBlock(numSamples: Int) -> [Float] {

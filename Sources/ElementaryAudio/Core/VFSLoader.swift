@@ -88,7 +88,7 @@ public enum VFSLoader {
     /// To free a resource, stop referencing its key in the graph, re-render, then call
     /// this method. The runtime will collect entries with a zero reference count.
     public static func pruneUnreferencedResources() {
-        ElemRuntime.getInstance().gc()
+        _ = ElemRuntime.getInstance().gc()
     }
 }
 

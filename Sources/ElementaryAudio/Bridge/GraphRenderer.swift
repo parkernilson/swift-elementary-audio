@@ -160,7 +160,8 @@ public final class GraphRenderer: @unchecked Sendable {
 
     /// Runs garbage collection on the runtime, releasing unused nodes
     public func gc() {
-        ElemRuntime.getInstance().gc()
+        let prunedNodeIds = ElemRuntime.getInstance().gc()
+        reconciliationCache.evict(nodeIds: prunedNodeIds)
     }
 
     /// Resets the runtime

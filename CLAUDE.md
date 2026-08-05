@@ -10,7 +10,7 @@ Swift Elementary Audio — a declarative Swift DSL for real-time audio processin
 
 ```bash
 swift build          # Build all targets
-swift test           # Run all 23 tests (ComparisonNodeTests + GraphRendererProcessTests)
+swift test          # Run all 64 tests (ComparisonNodeTests, SequencerNodeTests, GraphRendererProcessTests, NodeHasherTests, ReconciliationCacheTests, InstructionEncoderReconciliationTests)
 swift run swift-elementary-audio     # Run the macOS SwiftUI demo app
 swift run ElementaryPlayground       # Run the visual node editor playground
 ```
