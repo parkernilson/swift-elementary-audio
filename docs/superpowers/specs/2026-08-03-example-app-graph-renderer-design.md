@@ -30,6 +30,32 @@ Make the `Example/` Tuist iOS app play a simple sine oscillator through
 working demonstration of the DSL + graph renderer, using the library's own
 intended public entry point rather than a lower-level building block.
 
+## Prerequisite
+
+This spec depends on
+`2026-08-03-graph-reconciliation-engine-design.md`. Without it,
+`El.const(key:value:)` is inert (confirmed by reading
+`Sources/cxxElementaryAudio/ElementaryAudio/runtime/elem/Runtime.h` — the
+native runtime keys nodes strictly by numeric `NodeId`, with no `"key"`
+string handling anywhere), so a naive rebuild-and-`render()`-again approach
+would hard-swap the oscillator node on every change. With reconciliation in
+place, the same approach becomes efficient and glitch-free automatically.
+
+## Reference material
+
+Read these before implementing, alongside the reconciliation spec's own
+reference list — this task is about using `AudioEngine` the way the library
+actually intends it to be used:
+
+- Making Sound 101 (Overview): https://www.elementary.audio/docs/guides/Making_Sound
+- Sample Accurate Rendering: https://www.elementary.audio/docs/guides/Sample_Accurate_Rendering
+- Native Integrations: https://www.elementary.audio/docs/guides/Native_Integrations
+- Understanding Keys: https://www.elementary.audio/docs/guides/Understanding_Keys
+
+The real Elementary source at `../elementary` is the authority for anything
+the docs don't answer precisely — see the reconciliation spec for specific
+file pointers into it.
+
 ## Non-goals (explicitly deferred)
 
 - **`createRef`**: Elementary's real API separates two update mechanisms —
@@ -40,18 +66,17 @@ intended public entry point rather than a lower-level building block.
 - **`AudioEngine.setProperty(nodeId:...)`**: rejected as a design — it would
   expose the raw `NodeID`-based plumbing a `createRef` should be built on top
   of, as if it were the intended ergonomic API. Not added.
-- **Key-based reconciliation** (`El.const(key:value:)`): confirmed inert in
-  this codebase — `elem::Runtime::createNode` (`Runtime.h`) keys its internal
-  `nodeTable` strictly by numeric `NodeId`; there is no `"key"` string handling
-  anywhere in the C++ runtime. Key-based diffing lives entirely in Elementary's
-  JS `Renderer`, which this Swift port has no equivalent of. Not used here.
 - **`AudioEngine.events()`**: stays a stub. No analysis nodes (`meter`,
   `scope`, `snapshot`) are used by this simple example.
-- **`AudioEngine.reset()`/gc lifecycle**: untouched.
+- **`AudioEngine.reset()`/gc lifecycle beyond what the reconciliation spec
+  already wires up**: untouched here.
 - **Restoring `ElementaryPlayground`**: separate, larger decision (local path
   dependency vs. remote package resolution) — not part of this task.
-- **Smooth/click-free parameter changes**: out of scope. See "Known
-  limitation" below.
+- **Parameter smoothing/ramping**: reconciliation (see Prerequisite) makes a
+  value change an in-place update on the *same* native node — no phase reset,
+  no node-recreate glitch. It does not add ramping/smoothing of the value
+  itself; an instantaneous jump from 440 to 441 is still instantaneous. That's
+  a separate DSP concern, out of scope here.
 
 ## Architecture
 
@@ -96,21 +121,29 @@ Example app: SimpleAudioEngine (ContentView.swift)
 - Setup (in a `Task` from `init`):
   ```swift
   engine = try await AudioEngine(sampleRate: 44100, blockSize: 512)
-  try await engine?.render { El.cycle(frequency) * 0.3 }
+  try await engine?.render { El.cycle(El.const(key: "frequency", value: frequency)) * 0.3 }
   ```
 - `updateFrequency()`:
   ```swift
   func updateFrequency() {
-      Task { try? await engine?.render { El.cycle(frequency) * 0.3 } }
+      Task {
+          try? await engine?.render {
+              El.cycle(El.const(key: "frequency", value: frequency)) * 0.3
+          }
+      }
   }
   ```
   Full rebuild of the `AudioGraph` and a fresh `render()` call on every
-  change — no `NodeID`, no `setProperty`, no ref. This is the pattern
-  Elementary's own docs describe as the base case ("audio graphs as pure
-  functions of application state — rebuild the graph and let Elementary
-  reconcile"); it works today without any extra plumbing because
-  `GraphRenderer.render()` already calls `gc()` on every invocation
-  specifically to clean up the previous render's orphaned nodes.
+  change — no `NodeID`, no `setProperty`, no ref, at this call site. This is
+  the pattern Elementary's own docs describe as the base case ("audio graphs
+  as pure functions of application state — rebuild the graph and let
+  Elementary reconcile"), and it is now genuinely efficient because of the
+  Prerequisite: the reconciliation engine recognizes the `"frequency"`-keyed
+  const node across renders and emits a single `setProperty`, reusing the
+  same native node (and its running phase) rather than recreating it.
+  Without that prerequisite, this same code would silently degrade to a full
+  node swap on every call — the keyed const only pays off once reconciliation
+  exists.
 - `play()` → `Task { try? await engine?.start() }`;
   `stop()` → `Task { await engine?.stop() }`.
 - Remove the waveform `Picker`, its backing `@Published var waveform`, and
@@ -124,10 +157,12 @@ Example app: SimpleAudioEngine (ContentView.swift)
 
 ## Data flow
 
-Slider drag → `updateFrequency()` → new `AudioGraph { El.cycle(frequency) * 0.3 }`
-→ `AudioEngine.render(graph:)` → `GraphRenderer.render()` (gc → encode →
-`applyInstructions` → `activateRootsAndCommit`) → next audio block picks up
-the new render sequence.
+Slider drag → `updateFrequency()` → new
+`AudioGraph { El.cycle(El.const(key: "frequency", value: frequency)) * 0.3 }`
+→ `AudioEngine.render(graph:)` → `GraphRenderer.render()` (gc → hash-aware
+encode, hitting the `"frequency"` key on every call after the first →
+`applyInstructions` with a single `setProperty` → `activateRootsAndCommit`)
+→ next audio block picks up the updated value on the same running node.
 
 ## Error handling
 
@@ -138,27 +173,30 @@ error-handling style. No new error-handling machinery is introduced.
 
 ## Known limitation
 
-Because there is no reconciliation (no keys, no refs) in this Swift port,
-every `render()` call is a hard swap: the previous const/cycle nodes are
-discarded and new ones created. Rapid slider dragging may produce audible
-clicking rather than a smooth ramp. This is an accepted tradeoff for this
-"very simple setup" pass — the correct long-term fix is `createRef`, which is
-explicitly deferred (see Non-goals).
+Reconciliation (Prerequisite) removes the phase-reset/node-recreate glitch —
+the oscillator's underlying native node is reused across renders, not
+rebuilt. It does not add value smoothing: each `render()` still applies an
+instantaneous jump to the frequency value, so very rapid slider dragging may
+still sound stepped rather than perfectly continuous. That's a parameter-
+smoothing concern, explicitly out of scope (see Non-goals).
 
 ## Testing
 
 - New `Tests/ElementaryAudioTests/AudioEngineTests.swift`: a smoke test that
   constructs an `AudioEngine`, calls `render()` with two different graphs in
   sequence (exercising the exact repeated-re-render path this design relies
-  on), and calls `start()`/`stop()` — asserting no throw/crash. Sample-level
+  on), and calls `start()`/`stop()` — asserting no throw/crash. It should
+  also assert, using a keyed const across two `render()` calls, that this
+  reuses the same underlying node rather than recreating it — the same
+  property the reconciliation spec's own tests check at the `GraphRenderer`
+  level, verified here one layer up through `AudioEngine`. Sample-level
   correctness of the DSL → graph → render path is already covered by
   `GraphRendererProcessTests`, and `AudioEngine.render` now just delegates to
   the same `GraphRenderer.render`, so that coverage is not duplicated.
 - `Example/` app: verified by building via Tuist + `xcodebuild`, the same way
   `e53ca60` ("fix: build the Tuist Example app") was verified. This
   environment cannot play audio through speakers, so audible correctness
-  (including the click-per-change limitation noted above) cannot be verified
-  here and will be stated plainly rather than claimed.
+  cannot be verified here and will be stated plainly rather than claimed.
 
 ## Branch
 
