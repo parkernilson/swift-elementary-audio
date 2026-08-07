@@ -77,17 +77,29 @@ Mapping this onto the Swift port:
 
 Conclusion: the missing piece is not "finish `AudioEngine`" — it's the one
 thing `WebRenderer.initialize(audioContext)` does that `GraphRenderer` doesn't
-yet: attach itself into a caller-owned engine and hand back the node to route.
-`AudioEngine` itself should be deleted, not completed.
+yet: hand back a ready-to-use native audio node. `AudioEngine` itself should
+be deleted, not completed.
+
+One further difference from the JS case: `WebRenderer.initialize` *requires*
+an `AudioContext` parameter because an `AudioWorkletNode` is inherently
+constructed against a specific context (`new AudioWorkletNode(audioContext,
+...)` — it cannot exist independent of one, and the worklet module must be
+registered on that exact context). `AVAudioSourceNode` has no such
+requirement — it's a free-standing object until something calls
+`engine.attach(node)`. So the Swift method doesn't need an `AVAudioEngine`
+parameter at all; it can simply build and return the node, leaving *every*
+decision about which engine, which destination, and which bus to attach/
+connect to entirely up to the caller — an even cleaner split of
+responsibility than the JS case allows for.
 
 ## Goal
 
-Give `GraphRenderer` the one piece of glue `WebRenderer.initialize(audioContext)`
-provides in JS — wiring its output into a caller-owned native audio
-engine — and remove the stub that was standing in for it, so the library's
-actual entry point (`GraphRenderer`) matches how Elementary's own JS packages
-divide responsibility between the engine-agnostic renderer and the
-caller-owned platform audio context.
+Give `GraphRenderer` a method that produces a ready-to-use `AVAudioSourceNode`
+wired to its own `render`/`process` pipeline — the equivalent of what
+`WebRenderer.initialize(audioContext)` hands back in JS — and remove the stub
+that was standing in for it. `GraphRenderer`'s responsibility ends at handing
+back the node; attaching it to an engine, choosing a destination, and
+starting/stopping that engine all stay the caller's job, never the library's.
 
 ## Non-goals (explicitly deferred)
 
@@ -107,14 +119,14 @@ caller-owned platform audio context.
 - **`events()` / analysis-node event streaming.** Also marked with a `TODO`
   doc comment (Part 3). `ElemRuntime` has no Swift-facing bridge for
   `elem::Runtime::processQueuedEvents` at all today — this is new C++
-  bridging work, a different kind of task than the pure-Swift attachment glue
-  this spec adds, and needs its own design spec.
+  bridging work, a different kind of task than the pure-Swift audio-node
+  creation this spec adds, and needs its own design spec.
 - **A new standalone example view.** Earlier drafts of this spec planned a
   third menu entry to showcase the completed `AudioEngine` actor plus
   `createRef`. With `AudioEngine` deleted and `createRef` deferred, there's
   nothing left for such a view to demonstrate beyond what
   `ChangingConfigsView` already shows (keyed-const reconciliation through a
-  renderer attached to a real `AVAudioEngine`). Not added.
+  renderer's own audio node attached to a real `AVAudioEngine`). Not added.
 - **`ContentView`/"Raw CustomNode Demo"**: untouched, per
   `2026-08-06-example-app-menu-changing-configs-design.md`'s existing
   protection of this file as a deliberately raw, unabstracted example.
@@ -129,7 +141,7 @@ caller-owned platform audio context.
 
 - `../elementary/js/packages/web-renderer/index.ts` and its `README.md` —
   `WebRenderer.initialize(audioContext, workletOptions) -> AudioWorkletNode`,
-  the method this spec's `attachToEngine` mirrors.
+  the method this spec's `getAudioNode` is the Swift-side counterpart to.
 - `../elementary/js/packages/offline-renderer/index.ts` — same
   caller-owns-the-context division, for the non-realtime case.
 - `../elementary/js/packages/core/index.ts` — `Renderer` class; confirms
@@ -140,8 +152,9 @@ caller-owned platform audio context.
   `initialize`, `render`, `process` methods this spec adds one method
   alongside.
 - `Example/Sources/ChangingConfigsView.swift` — the existing hand-rolled
-  format/`AVAudioSourceNode`/attach/connect sequence this spec extracts into
-  `GraphRenderer.attachToEngine(...)`.
+  format/`AVAudioSourceNode`/attach/connect sequence this spec partially
+  extracts into `GraphRenderer.getAudioNode(...)` (attach/connect stay in
+  this file, as the caller's own decision).
 
 ## Architecture
 
@@ -157,12 +170,13 @@ After:
 
 ```
 Example app (owns AVAudioEngine, exactly as a JS app owns its AudioContext)
-    → GraphRenderer.attachToEngine(_:sampleRate:blockSize:channels:)
+    → GraphRenderer.getAudioNode(sampleRate:blockSize:channels:)
           → GraphRenderer.initialize(...)                    (existing)
           → builds an AVAudioSourceNode whose callback calls
             GraphRenderer.process(...)                        (existing, tested)
-          → engine.attach(node); engine.connect(node, to: engine.mainMixerNode, ...)
           → returns the node
+    → app decides: engine.attach(node); engine.connect(node, to: ..., format: ...)
+      — GraphRenderer has no opinion on destination or bus
     → app calls engine.start()/.stop() itself (mirrors ctx.resume()/.close() in JS)
     → app calls renderer.render(...) directly — same call ChangingConfigsView
       already makes today
@@ -177,21 +191,21 @@ the `AudioEngine` type (only unrelated types whose names happen to contain
 `State`, `AudioEngineError`, `events()` stub, and `static func start(...)`
 convenience along with it.
 
-## Part 2 — Add `GraphRenderer.attachToEngine(...)`
+## Part 2 — Add `GraphRenderer.getAudioNode(...)`
 
-New file: `Sources/ElementaryAudio/Bridge/GraphRenderer+AVAudioEngine.swift`.
+New file: `Sources/ElementaryAudio/Bridge/GraphRenderer+AudioNode.swift`.
 
 ```swift
 import AVFoundation
 
 extension GraphRenderer {
-    /// Wires this renderer's output into a caller-owned `AVAudioEngine`,
-    /// mirroring `WebRenderer.initialize(audioContext) -> AudioWorkletNode`:
-    /// the caller keeps ownership of the engine and is responsible for
-    /// starting/stopping it and routing the returned node.
-    @discardableResult
-    public func attachToEngine(
-        _ engine: AVAudioEngine,
+    /// Builds an `AVAudioSourceNode` wired to this renderer's own
+    /// `render`/`process` pipeline — the Swift-side counterpart to
+    /// `WebRenderer.initialize(audioContext) -> AudioWorkletNode`. Unlike
+    /// that JS method, this does not take or touch an `AVAudioEngine`: the
+    /// caller decides whether/where to `attach`/`connect` the returned node,
+    /// and owns starting/stopping whatever engine it ends up in.
+    public func getAudioNode(
         sampleRate: Double = 44100,
         blockSize: Int = 512,
         channels: AVAudioChannelCount = 2
@@ -199,7 +213,7 @@ extension GraphRenderer {
         initialize(sampleRate: sampleRate, blockSize: blockSize)
 
         let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channels)!
-        let node = AVAudioSourceNode(format: format) { [self] _, _, frameCount, audioBufferList in
+        return AVAudioSourceNode(format: format) { [self] _, _, frameCount, audioBufferList in
             let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
             let outputPtrs: [UnsafeMutablePointer<Float>?] = ablPointer.map {
                 $0.mData?.assumingMemoryBound(to: Float.self)
@@ -207,10 +221,6 @@ extension GraphRenderer {
             self.process(outputData: outputPtrs, outputChannels: outputPtrs.count, numSamples: Int(frameCount))
             return noErr
         }
-
-        engine.attach(node)
-        engine.connect(node, to: engine.mainMixerNode, format: format)
-        return node
     }
 }
 ```
@@ -224,9 +234,14 @@ extension GraphRenderer {
   outputChannels: numSamples:)` overload — generalizes over channel count
   rather than hardcoding mono the way `ChangingConfigsView`'s inline version
   currently does.
-- `attachToEngine` never calls `engine.start()`/`.stop()` — the caller does,
-  exactly as a JS caller calls `ctx.resume()`/`audioContext.close()` around
-  `WebRenderer.initialize()`.
+- Deliberately takes no `AVAudioEngine` parameter and calls no
+  `attach`/`connect`/`start`/`stop` — every one of those is a decision the
+  caller is better positioned to make (which engine, which destination bus,
+  when to start), and baking one option (e.g. always `mainMixerNode`) into
+  the library would be an opinion this layer shouldn't hold.
+- The returned node's format is retrievable via `node.outputFormat(forBus:
+  0)`, so callers never need to reconstruct or guess the `AVAudioFormat` used
+  internally when calling `engine.connect(node, to:format:)`.
 
 ## Part 3 — Deferred-work markers on `GraphRenderer`
 
@@ -253,14 +268,19 @@ is a worse trap for callers than a comment:
 
 ## Part 4 — Refactor `Example/Sources/ChangingConfigsView.swift`
 
-`ToneEngine.init()` currently hand-builds the `AVAudioFormat`,
-`AVAudioSourceNode`, `engine.attach`, and `engine.connect` sequence inline
-(~15 lines) before rendering the first configuration. Replace that block with
-a single call to the new helper:
+`ToneEngine.init()` currently hand-builds the `AVAudioFormat` and
+`AVAudioSourceNode` inline (~15 lines) before attaching/connecting and
+rendering the first configuration. Replace the format/node-construction part
+of that block with a call to the new helper, keeping `attach`/`connect` here
+since that's now this file's decision to make, not `GraphRenderer`'s:
 
 ```swift
 init() {
-    sourceNode = renderer.attachToEngine(engine, sampleRate: 44100, blockSize: 512, channels: 1)
+    let node = renderer.getAudioNode(sampleRate: 44100, blockSize: 512, channels: 1)
+    sourceNode = node
+    engine.attach(node)
+    engine.connect(node, to: engine.mainMixerNode, format: node.outputFormat(forBus: 0))
+
     do {
         try renderer.render(configurations[currentConfigIndex].build())
     } catch {
@@ -269,24 +289,25 @@ init() {
 }
 ```
 
-This both simplifies the one existing example and exercises
-`attachToEngine` as a real caller — there is no other production call site to
-prove it against otherwise. `start()`/`stop()`/`advanceConfiguration()` and
-everything else in `ToneEngine` are unchanged.
+This both simplifies the one existing example and exercises `getAudioNode` as
+a real caller — there is no other production call site to prove it against
+otherwise. `start()`/`stop()`/`advanceConfiguration()` and everything else in
+`ToneEngine` are unchanged.
 
 ## Data flow
 
 Button tap → `advanceConfiguration()` → build next `AudioGraph` →
 `GraphRenderer.render()` (gc → hash-aware encode → `applyInstructions` →
 commit) → next audio block, produced via the `AVAudioSourceNode` callback
-`attachToEngine` installed, picks up the change on the RT thread. Identical to
-the data flow the menu spec already documented — this spec only changes how
-the source node gets created and attached, not what happens after.
+`getAudioNode` built and `ChangingConfigsView` attached, picks up the change
+on the RT thread. Identical to the data flow the menu spec already
+documented — this spec only changes how the source node gets created, not
+what happens after.
 
 ## Error handling
 
 `GraphRenderer.render()` still throws `RenderError`; `ChangingConfigsView`
-still catches and `print`s, unchanged. `attachToEngine` itself does not throw:
+still catches and `print`s, unchanged. `getAudioNode` itself does not throw:
 its only failure point is `AVAudioFormat(standardFormatWithSampleRate:
 channels:)`'s force-unwrap, which cannot fail for the sample rates/channel
 counts this library targets — matching the force-unwrap already used at every
@@ -295,24 +316,22 @@ existing `AVAudioFormat` construction site in this codebase
 
 ## Testing
 
-New `Tests/ElementaryAudioTests/GraphRendererAVAudioEngineTests.swift`. Note
-an `AVAudioSourceNode`'s render block is a private closure with no public
-hook to invoke directly in a test — these tests check `attachToEngine`'s
-observable effects (attachment/connection state, and runtime state via the
-existing tested `process()` path) rather than driving audio through the node
-itself:
+New `Tests/ElementaryAudioTests/GraphRendererAudioNodeTests.swift`. Note an
+`AVAudioSourceNode`'s render block is a private closure with no public hook
+to invoke directly in a test — these tests check `getAudioNode`'s observable
+effects (the returned node's format, and runtime state via the existing
+tested `process()` path) rather than driving audio through the node itself:
 
-- `attachToEngine` does not throw/crash, and afterward `engine.attachedNodes`
-  contains the returned node (confirms `engine.attach` ran) and
-  `engine.outputConnectionPoints(for: node, outputBus: 0)` includes
-  `engine.mainMixerNode` (confirms `engine.connect` ran).
-- After `attachToEngine(engine, ...)` followed by `renderer.render(graph)`,
-  calling `renderer.process(...)` directly (the existing, already-tested
-  array overload — same technique `GraphRendererProcessTests` uses) produces
-  non-silent output. This is the real regression to guard against:
-  `attachToEngine`'s internal `initialize()` call must not leave the runtime
-  in a state where the normal `render()`/`process()` path stops working.
-- Calling `attachToEngine` a second time on the same `GraphRenderer` (e.g. a
+- `getAudioNode` does not throw/crash, and the returned node's
+  `outputFormat(forBus: 0)` reflects the requested `sampleRate`/`channels`.
+- After `getAudioNode(sampleRate:blockSize:channels:)` followed by
+  `renderer.render(graph)`, calling `renderer.process(...)` directly (the
+  existing, already-tested array overload — same technique
+  `GraphRendererProcessTests` uses) produces non-silent output. This is the
+  real regression to guard against: `getAudioNode`'s internal `initialize()`
+  call must not leave the runtime in a state where the normal
+  `render()`/`process()` path stops working.
+- Calling `getAudioNode` a second time on the same `GraphRenderer` (e.g. a
   reconfigure) does not crash.
 
 `Example/` app: verified by `tuist generate` + building via `xcodebuild`, the
@@ -324,5 +343,5 @@ plainly rather than claimed.
 
 The branch used by the specs this one supersedes work from
 (`make-example-app-use-graph-renderer`) has already been merged to `main`.
-This work happens on a new branch, `graph-renderer-attach-to-engine`, created
+This work happens on a new branch, `graph-renderer-get-audio-node`, created
 from `main`.
