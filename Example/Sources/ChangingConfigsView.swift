@@ -36,8 +36,9 @@ private final class ToneEngine: ObservableObject {
     init() {
         let node = renderer.getAudioNode(sampleRate: 44100, blockSize: 512, channels: 1)
         sourceNode = node
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
         engine.attach(node)
-        engine.connect(node, to: engine.mainMixerNode, format: node.outputFormat(forBus: 0))
+        engine.connect(node, to: engine.mainMixerNode, format: format)
 
         do {
             try renderer.render(configurations[currentConfigIndex].build())
