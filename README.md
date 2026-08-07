@@ -40,9 +40,10 @@ import AVFoundation
 // Create your own AVAudioEngine and attach Elementary's renderer to it
 let avEngine = AVAudioEngine()
 let renderer = GraphRenderer()
-let node = renderer.getAudioNode(sampleRate: 44100, blockSize: 512, channels: 2)
+let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
+let node = renderer.getAudioNode(sampleRate: format.sampleRate, blockSize: 512, channels: format.channelCount)
 avEngine.attach(node)
-avEngine.connect(node, to: avEngine.mainMixerNode, format: node.outputFormat(forBus: 0))
+avEngine.connect(node, to: avEngine.mainMixerNode, format: format)
 
 // Render a simple sine wave
 try renderer.render {
