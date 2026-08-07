@@ -19,9 +19,18 @@ final class GraphRendererAudioNodeTests: XCTestCase {
 
     func testGetAudioNodeReturnsNodeWithRequestedFormat() {
         let node = renderer.getAudioNode(sampleRate: 48000, blockSize: 256, channels: 1)
-        let format = node.outputFormat(forBus: 0)
-        XCTAssertEqual(format.sampleRate, 48000)
-        XCTAssertEqual(format.channelCount, 1)
+
+        // AVAudioSourceNode only reports its constructed format once attached and
+        // connected to an audio engine. We do this here in the test to observe the format.
+        // GraphRenderer.getAudioNode itself must never do this (per design constraint).
+        let format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
+        let engine = AVAudioEngine()
+        engine.attach(node)
+        engine.connect(node, to: engine.mainMixerNode, format: format)
+
+        let nodeFormat = node.outputFormat(forBus: 0)
+        XCTAssertEqual(nodeFormat.sampleRate, 48000)
+        XCTAssertEqual(nodeFormat.channelCount, 1)
     }
 
     func testRenderAndProcessStillWorkAfterGetAudioNode() throws {
