@@ -15,21 +15,13 @@ extension GraphRenderer {
         initialize(sampleRate: sampleRate, blockSize: blockSize)
 
         let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channels)!
-        let renderer = self
-        let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
+        return AVAudioSourceNode(format: format) { [self] _, _, frameCount, audioBufferList in
             let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
             let outputPtrs: [UnsafeMutablePointer<Float>?] = ablPointer.map {
                 $0.mData?.assumingMemoryBound(to: Float.self)
             }
-            renderer.process(outputData: outputPtrs, outputChannels: outputPtrs.count, numSamples: Int(frameCount))
+            self.process(outputData: outputPtrs, outputChannels: outputPtrs.count, numSamples: Int(frameCount))
             return noErr
         }
-
-        // Attach and connect the node to an internal audio engine so it properly reports the format
-        let engine = AVAudioEngine()
-        engine.attach(node)
-        engine.connect(node, to: engine.mainMixerNode, format: format)
-
-        return node
     }
 }
