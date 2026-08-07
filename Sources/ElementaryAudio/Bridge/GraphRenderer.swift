@@ -258,6 +258,24 @@ public final class GraphRenderer: @unchecked Sendable {
     }
 }
 
+// MARK: - Deferred Work
+
+// TODO(createRef): Port Elementary's `Renderer.createRef(kind, props, children)`
+// (see `../elementary/js/packages/core/index.ts`) — a scoped property setter
+// that bypasses full graph reconciliation for a single node. Needs its own
+// design spec: a `ReconciliationCache` lookup keyed by `NodeID`, a property
+// diff against the cached snapshot, and a decision about whether Swift's
+// typed node constructors need a generic kind/properties/children escape
+// hatch to match createRef's full generality (every real JS usage is on a
+// `const` node, but the JS API itself is generic over any node kind).
+
+// TODO(events): Bridge `elem::Runtime::processQueuedEvents`
+// (`Sources/cxxElementaryAudio/ElementaryAudio/runtime/elem/Runtime.h`) to a
+// Swift-facing event stream, mirroring `WebRenderer`'s `EventEmitter` /
+// `OfflineRenderer.process()`'s inline event draining. `ElemRuntime` has no
+// Swift-facing event API today — this is new C++ bridging work and needs its
+// own design spec.
+
 // MARK: - Convenience Extensions
 
 extension GraphRenderer {
