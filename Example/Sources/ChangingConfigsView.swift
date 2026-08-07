@@ -6,6 +6,7 @@ import ElementaryAudio
 /// press so the graph reconciliation engine's behavior can be heard
 /// directly: a keyed value change updates the running oscillator in place
 /// (no pop), while a structurally different node forces a full rebuild.
+@MainActor
 private final class ToneEngine: ObservableObject {
     let configurations: [(label: String, build: () -> AudioGraph)] = [
         (
@@ -89,7 +90,7 @@ struct ChangingConfigsView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Text("GraphRenderer verification")
+            Text("Tap Next to cycle graph configurations")
                 .font(.headline)
             Text(toneEngine.configurations[toneEngine.currentConfigIndex].label)
                 .font(.system(.body, design: .monospaced))
