@@ -12,7 +12,7 @@ Swift Elementary Audio provides a modern, type-safe Swift API for building audio
 - **Type-Safe** - Compile-time checked node types and properties
 - **40+ Built-in Nodes** - Oscillators, filters, delays, effects, and more
 - **Real-Time Safe** - Designed for glitch-free audio processing
-- **Async/Await** - Modern Swift concurrency for engine lifecycle
+- **Bring Your Own Engine** - Attach directly to your own `AVAudioEngine`; no owned lifecycle to manage
 - **Custom Nodes** - Extend with your own DSP implementations
 
 ## Requirements
@@ -35,17 +35,23 @@ dependencies: [
 
 ```swift
 import ElementaryAudio
+import AVFoundation
 
-// Create an audio engine
-let engine = try await AudioEngine()
+// Create your own AVAudioEngine and attach Elementary's renderer to it
+let avEngine = AVAudioEngine()
+let renderer = GraphRenderer()
+let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
+let node = renderer.getAudioNode(sampleRate: format.sampleRate, blockSize: 512, channels: format.channelCount)
+avEngine.attach(node)
+avEngine.connect(node, to: avEngine.mainMixerNode, format: format)
 
 // Render a simple sine wave
-try await engine.render {
+try renderer.render {
     El.cycle(440) * 0.5  // 440Hz sine at 50% volume
 }
 
 // Start playback
-try await engine.start()
+try avEngine.start()
 ```
 
 ## Examples
@@ -53,7 +59,7 @@ try await engine.start()
 ### FM Synthesis
 
 ```swift
-try await engine.render {
+try renderer.render {
     let modulator = El.cycle(220) * 200
     El.cycle(440 + modulator) * 0.3
 }
@@ -62,7 +68,7 @@ try await engine.render {
 ### Filtered Sawtooth with LFO
 
 ```swift
-try await engine.render {
+try renderer.render {
     let lfo = El.cycle(0.5) * 500 + 1000
     El.blepsaw(110)
         .lowpass(frequency: lfo, q: 4)
@@ -73,7 +79,7 @@ try await engine.render {
 ### Stereo Output
 
 ```swift
-try await engine.render {
+try renderer.render {
     El.cycle(440) * 0.3  // Left channel
     El.cycle(550) * 0.3  // Right channel
 }
@@ -82,7 +88,7 @@ try await engine.render {
 ### Delay Effect
 
 ```swift
-try await engine.render {
+try renderer.render {
     let dry = El.cycle(440) * 0.3
     let wet = El.delay(44100, El.const(22050), dry) * 0.5
     dry + wet
@@ -92,7 +98,7 @@ try await engine.render {
 ### Step Sequencer
 
 ```swift
-try await engine.render {
+try renderer.render {
     let trigger = El.phasor(4)  // 4Hz trigger
     let notes: [Double] = [261.63, 293.66, 329.63, 349.23]  // C D E F
     let freq = El.seq(trigger, notes)

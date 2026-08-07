@@ -34,30 +34,17 @@ private final class ToneEngine: ObservableObject {
     private var sourceNode: AVAudioSourceNode?
 
     init() {
-        renderer.initialize(sampleRate: 44100, blockSize: 512)
+        let node = renderer.getAudioNode(sampleRate: 44100, blockSize: 512, channels: 1)
+        sourceNode = node
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
+        engine.attach(node)
+        engine.connect(node, to: engine.mainMixerNode, format: format)
+
         do {
             try renderer.render(configurations[currentConfigIndex].build())
         } catch {
             print("[ToneEngine] render failed: \(error)")
         }
-
-        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
-        let renderer = self.renderer
-        let sourceNode = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
-            let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
-            guard let buffer = ablPointer.first,
-                  let ptr = buffer.mData?.assumingMemoryBound(to: Float.self) else {
-                return noErr
-            }
-            var channelPtr: UnsafeMutablePointer<Float>? = ptr
-            withUnsafeMutablePointer(to: &channelPtr) { channelPtrPtr in
-                renderer.process(outputData: channelPtrPtr, outputChannels: 1, numSamples: Int(frameCount))
-            }
-            return noErr
-        }
-        self.sourceNode = sourceNode
-        engine.attach(sourceNode)
-        engine.connect(sourceNode, to: engine.mainMixerNode, format: format)
     }
 
     func start() {
