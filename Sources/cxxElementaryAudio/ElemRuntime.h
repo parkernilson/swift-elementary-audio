@@ -175,11 +175,15 @@ public:
         return runtime->applyInstructions(batch);
     }
 
-    // Explicit garbage collection (v4: replaces implicit deleteNode)
-    void gc() {
-        if (runtime) {
-            runtime->gc();
-        }
+    // Explicit garbage collection (v4: replaces implicit deleteNode).
+    // Returns the node IDs the native runtime actually pruned, so Swift-side
+    // caches (GraphRenderer's reconciliation node map) can evict matching
+    // entries and stay in sync with what the runtime has destroyed.
+    std::vector<int32_t> gc() {
+        if (!runtime) return {};
+
+        auto pruned = runtime->gc();
+        return std::vector<int32_t>(pruned.begin(), pruned.end());
     }
 
     // Reset the graph

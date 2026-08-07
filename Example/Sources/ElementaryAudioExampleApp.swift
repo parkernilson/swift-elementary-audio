@@ -4,7 +4,7 @@ import SwiftUI
 struct ElementaryAudioExampleApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ExampleMenuView()
         }
     }
 }

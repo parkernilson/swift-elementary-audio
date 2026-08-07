@@ -1,0 +1,110 @@
+import SwiftUI
+import AVFoundation
+import ElementaryAudio
+
+/// Cycles through a handful of `AudioGraph` configurations on each button
+/// press so the graph reconciliation engine's behavior can be heard
+/// directly: a keyed value change updates the running oscillator in place
+/// (no pop), while a structurally different node forces a full rebuild.
+@MainActor
+private final class ToneEngine: ObservableObject {
+    let configurations: [(label: String, build: () -> AudioGraph)] = [
+        (
+            label: "El.cycle(El.const(key: \"frequency\", value: 440)) * 0.3",
+            build: { AudioGraph { El.cycle(El.const(key: "frequency", value: 440.0)) * 0.3 } }
+        ),
+        (
+            label: "El.cycle(El.const(key: \"frequency\", value: 660)) * 0.3  — keyed value change",
+            build: { AudioGraph { El.cycle(El.const(key: "frequency", value: 660.0)) * 0.3 } }
+        ),
+        (
+            label: "El.blepsquare(440.0) * 0.3  — structurally different",
+            build: { AudioGraph { El.blepsquare(440.0) * 0.3 } }
+        ),
+        (
+            label: "El.cycle(El.const(key: \"frequency\", value: 440)) * 0.3  — back to config 1's shape",
+            build: { AudioGraph { El.cycle(El.const(key: "frequency", value: 440.0)) * 0.3 } }
+        ),
+    ]
+
+    @Published private(set) var currentConfigIndex = 0
+
+    private let engine = AVAudioEngine()
+    private let renderer = GraphRenderer()
+    private var sourceNode: AVAudioSourceNode?
+
+    init() {
+        renderer.initialize(sampleRate: 44100, blockSize: 512)
+        do {
+            try renderer.render(configurations[currentConfigIndex].build())
+        } catch {
+            print("[ToneEngine] render failed: \(error)")
+        }
+
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
+        let renderer = self.renderer
+        let sourceNode = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
+            let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
+            guard let buffer = ablPointer.first,
+                  let ptr = buffer.mData?.assumingMemoryBound(to: Float.self) else {
+                return noErr
+            }
+            var channelPtr: UnsafeMutablePointer<Float>? = ptr
+            withUnsafeMutablePointer(to: &channelPtr) { channelPtrPtr in
+                renderer.process(outputData: channelPtrPtr, outputChannels: 1, numSamples: Int(frameCount))
+            }
+            return noErr
+        }
+        self.sourceNode = sourceNode
+        engine.attach(sourceNode)
+        engine.connect(sourceNode, to: engine.mainMixerNode, format: format)
+    }
+
+    func start() {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try AVAudioSession.sharedInstance().setActive(true)
+            try engine.start()
+        } catch {
+            print("[ToneEngine] failed to start: \(error)")
+        }
+    }
+
+    func stop() {
+        engine.stop()
+    }
+
+    func advanceConfiguration() {
+        let next = (currentConfigIndex + 1) % configurations.count
+        do {
+            try renderer.render(configurations[next].build())
+            currentConfigIndex = next
+        } catch {
+            print("[ToneEngine] render failed: \(error)")
+        }
+    }
+}
+
+struct ChangingConfigsView: View {
+    @StateObject private var toneEngine = ToneEngine()
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("Tap Next to cycle graph configurations")
+                .font(.headline)
+            Text(toneEngine.configurations[toneEngine.currentConfigIndex].label)
+                .font(.system(.body, design: .monospaced))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            Button("Next Configuration") {
+                toneEngine.advanceConfiguration()
+            }
+            .padding(.top, 8)
+        }
+        .padding()
+        .navigationTitle("Changing Configs")
+        .onAppear { toneEngine.start() }
+        .onDisappear { toneEngine.stop() }
+    }
+}

@@ -12,7 +12,7 @@ import Foundation
 /// let notes: PropertyValue = .array([261.63, 293.66, 329.63])
 /// let config: PropertyValue = .object(["attack": .number(0.01), "release": .number(0.5)])
 /// ```
-public enum PropertyValue: Sendable, Equatable {
+public enum PropertyValue: Sendable, Equatable, Hashable {
     /// A floating-point number
     case number(Double)
 

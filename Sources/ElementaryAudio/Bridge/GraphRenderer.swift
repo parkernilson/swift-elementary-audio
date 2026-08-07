@@ -29,6 +29,9 @@ public final class GraphRenderer: @unchecked Sendable {
     private var createdNodeIds: Set<Int32> = []
     // Track root IDs for activation
     private var currentRootIds: [Int32] = []
+    // Persists across render() calls so unchanged nodes are updated in place
+    // instead of recreated -- see ReconciliationCache.
+    private let reconciliationCache = ReconciliationCache()
 
     /// Creates a new graph renderer
     public init() {}
@@ -43,43 +46,58 @@ public final class GraphRenderer: @unchecked Sendable {
 
         // Encode the graph to instructions
         var encoder = InstructionEncoder()
-        encoder.encode(graph)
+        encoder.encode(graph, cache: reconciliationCache)
 
         let instructions = encoder.allInstructions
 
         // Get the runtime singleton
         let runtime = ElemRuntime.getInstance()
 
-        // Collect root IDs and send instructions
-        var rootIds: [Int32] = []
+        do {
+            // Collect root IDs and send instructions
+            var rootIds: [Int32] = []
 
-        for instruction in instructions {
-            if instruction.type == .activateRoots, let ids = instruction.rootIds {
-                rootIds = ids.map { $0.rawValue }
-                continue // Handle activation at the end
-            }
-            if instruction.type == .commitUpdates {
-                continue // Handle commit at the end
+            for instruction in instructions {
+                if instruction.type == .activateRoots, let ids = instruction.rootIds {
+                    rootIds = ids.map { $0.rawValue }
+                    continue // Handle activation at the end
+                }
+                if instruction.type == .commitUpdates {
+                    continue // Handle commit at the end
+                }
+
+                let result = try sendInstruction(instruction, to: runtime)
+                if result != 0 {
+                    throw RenderError.renderFailed(result)
+                }
+
+                // Track created nodes
+                if instruction.type == .createNode, let nodeId = instruction.nodeId {
+                    createdNodeIds.insert(nodeId.rawValue)
+                }
             }
 
-            let result = try sendInstruction(instruction, to: runtime)
-            if result != 0 {
-                throw RenderError.renderFailed(result)
+            // Activate roots and commit
+            if !rootIds.isEmpty {
+                currentRootIds = rootIds
+                let result = activateAndCommit(rootIds, runtime: runtime)
+                if result != 0 {
+                    throw RenderError.renderFailed(result)
+                }
             }
-
-            // Track created nodes
-            if instruction.type == .createNode, let nodeId = instruction.nodeId {
-                createdNodeIds.insert(nodeId.rawValue)
-            }
-        }
-
-        // Activate roots and commit
-        if !rootIds.isEmpty {
-            currentRootIds = rootIds
-            let result = activateAndCommit(rootIds, runtime: runtime)
-            if result != 0 {
-                throw RenderError.renderFailed(result)
-            }
+        } catch {
+            // The encode pass above already populated reconciliationCache
+            // for the whole graph (entries are inserted/updated while
+            // building the instruction list, before anything is sent to the
+            // native runtime). If sending instructions fails partway
+            // through, the cache would otherwise keep asserting nodes exist
+            // natively that were never actually created, permanently
+            // wedging every future render. Clear it on the failure path only
+            // (never on success -- that would defeat the cache entirely) so
+            // a failed render is self-healing: the next render() call starts
+            // from a clean cache and does a full rebuild.
+            reconciliationCache.removeAll()
+            throw error
         }
     }
 
@@ -152,11 +170,13 @@ public final class GraphRenderer: @unchecked Sendable {
         // The runtime handles node replacement internally
         createdNodeIds.removeAll()
         currentRootIds.removeAll()
+        reconciliationCache.removeAll()
     }
 
     /// Runs garbage collection on the runtime, releasing unused nodes
     public func gc() {
-        ElemRuntime.getInstance().gc()
+        let prunedNodeIds = ElemRuntime.getInstance().gc()
+        reconciliationCache.evict(nodeIds: prunedNodeIds)
     }
 
     /// Resets the runtime
@@ -179,6 +199,11 @@ public final class GraphRenderer: @unchecked Sendable {
         runtime.initialize(sampleRate, Int32(blockSize))
         createdNodeIds.removeAll()
         currentRootIds.removeAll()
+        // ElemRuntime.initialize() replaces the entire native runtime, so any
+        // cached hash -> nodeId entries would point at nodes that no longer
+        // exist natively. Without this, a subsequent render() could hash-hit
+        // into a stale entry and fail to activate roots.
+        reconciliationCache.removeAll()
     }
 
     /// Sets a numeric property on a rendered node by its ID
