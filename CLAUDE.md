@@ -17,6 +17,17 @@ swift run ElementaryPlayground       # Run the visual node editor playground
 
 The Example/ directory contains a Tuist-based iOS app (requires `tuist generate`).
 
+### Working with the Example/ Tuist app
+
+`Example/` can't be a plain SPM executable target — iOS requires a real app bundle (bundle ID, Info.plist, code signing), which pure SPM targets don't produce. Tuist generates that Xcode project/workspace from `Example/Project.swift` instead of one being checked into git (avoiding `.pbxproj` merge conflicts). The generated `ElementaryAudioExample.xcodeproj`/`.xcworkspace` are gitignored.
+
+```bash
+cd Example
+tuist generate    # regenerates ElementaryAudioExample.xcodeproj/.xcworkspace
+```
+
+**Run this after adding, removing, or renaming any source file under `Sources/ElementaryAudio*`.** Tuist's generated Xcode project embeds a file list frozen at generation time — it does not discover new files on its own the way SPM does. Building the Example app in Xcode against a stale generation surfaces as `error: cannot find 'X' in scope` for anything added since the last `tuist generate`, even though `swift build`/`swift test` (which resolve sources dynamically) work fine. When in doubt, regenerate before opening/building `Example/` in Xcode.
+
 ## Architecture
 
 ```
