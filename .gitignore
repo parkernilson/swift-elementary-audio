@@ -8,6 +8,7 @@ DerivedData/
 .netrc
 
 # Tuist generated files
+Example/Tuist/.build
 Derived/
 *.xcodeproj
 *.xcworkspace

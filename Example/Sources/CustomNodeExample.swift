@@ -1,9 +1,8 @@
 import SwiftUI
 import AVFoundation
 import ElementaryAudio
-import cxxElementaryAudio
 
-struct ContentView: View {
+struct CustomNodeExample: View {
     @StateObject private var audioEngine = SimpleAudioEngine()
 
     var body: some View {
@@ -103,15 +102,7 @@ class SimpleAudioEngine: ObservableObject {
                 return noErr
             }
 
-            let context = elem.FloatBlockContext(
-                inputData: nil,
-                numInputChannels: 0,
-                outputData: ptr,
-                numSamples: Int(frameCount),
-                userData: nil
-            )
-
-            capturedNode.process(context)
+            capturedNode.processSimple(ptr, Int(frameCount))
 
             return noErr
         }
@@ -152,5 +143,5 @@ class SimpleAudioEngine: ObservableObject {
 }
 
 #Preview {
-    ContentView()
+    CustomNodeExample()
 }
